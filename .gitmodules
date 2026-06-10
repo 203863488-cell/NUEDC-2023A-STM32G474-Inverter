@@ -1,0 +1,3 @@
+[submodule "voloop"]
+	path = voloop
+	url = https://github.com/boxinger/voloop.git

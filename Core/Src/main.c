@@ -41,8 +41,8 @@
 
 #define DT_PRESCALER       HRTIM_TIMDEADTIME_PRESCALERRATIO_MUL8
 #define DT_VALUE           8U
-
-#define INV_FOUT_HZ        50.0f
+   
+#define INV_FOUT_HZ        50.0f   
 #define INV_TWOPI          ((float)(2.0 * 3.14159265358979323846))
 
 #define TIM6_PSC           169U
