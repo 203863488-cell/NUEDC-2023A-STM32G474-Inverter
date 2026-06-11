@@ -42,9 +42,9 @@
 #define C_VAL              0.000001f /* 滤波电容 (F)                 */
 
 /* ——— 输出规格 ———————————————————————————————————————————————— */
-#define VREF_RMS_INIT      24.0f    /* 上电默认输出 RMS 电压 (V)     */
+#define VREF_RMS_INIT       1.0f    /* 上电默认输出 RMS 电压 (V) — 首次上电从1V开始, 调试后改为24V */
 #define F_OUT              50.0f    /* 输出基波频率 (Hz)             */
-#define I_MAX_RMS           2.0f    /* 输出过流保护阈值 (A RMS)      */
+#define I_MAX_RMS           7.0f    /* 输出过流保护阈值 (A RMS)      */
 #define VREF_RMS_MIN        1.0f    /* 旋钮可调下限 (V)              */
 #define VREF_RMS_MAX       30.0f    /* 旋钮可调上限 (V)              */
 #define VREF_ENC_STEP       0.5f    /* 旋钮每格电压变化量 (V)        */
@@ -63,11 +63,11 @@
  *      用于衰减 LCL 谐振峰, 防止开环增益在 f_res 处 > 0 dB。
  *      设为 f_res / 3 ~ f_res / 5 效果较好。
  * ————————————————————————————————————————————————————————————— */
-#define F_C_TARGET         500.0f   /* 目标交叉频率 (Hz)             */
-#define PM_TARGET           60.0f   /* 目标相位裕度 (°)              */
-#define F_BW_RES             3.0f   /* PR 谐振带宽 (Hz)              */
-#define ERR_TRACK_PCT        1.0f   /* 期望跟踪误差 (%)              */
-#define F_LPF_FB          1500.0f   /* 反馈低通截止 (Hz)             */
+#define F_C_TARGET         200.0f   /* 目标交叉频率 (Hz) — 极保守配置 */
+#define PM_TARGET           75.0f   /* 目标相位裕度 (°) — 极大裕度   */
+#define F_BW_RES             5.0f   /* PR 谐振带宽 (Hz) — 宽带鲁棒   */
+#define ERR_TRACK_PCT        3.0f   /* 期望跟踪误差 (%) — 放宽要求   */
+#define F_LPF_FB           600.0f   /* 反馈低通截止 (Hz) — 深度滤波  */
 
 /* ——— 反馈极性 ————————————————————————————————————————————————
  *  +1 : 输出电压正半周 → ADC 读数为正 (相对 1.65V 中点)。
@@ -76,13 +76,19 @@
 #define PHASE_POLARITY        1
 
 /* --- 多谐振控制器 (消除 3/5/7 次谐波) --------------------
- *  HARM_COUNT : 谐波数量
+ *  HARM_COUNT : 谐波数量 — 设为0可完全禁用以提高稳定性
  *  F_BW_HARM  : 谐波谐振器带宽 (比基波宽, 增强鲁棒性)
  *  HARM_KR_FACTOR : 谐波 Kr = Kp * 此系数
  * ------------------------------------------------------- */
-#define HARM_COUNT             3
-#define F_BW_HARM           10.0f
-#define HARM_KR_FACTOR      10.0f
+#define HARM_COUNT             3     /* 3/5/7次谐波补偿 */
+#define HARM_FREQ_1         150.0f
+#define HARM_FREQ_2         250.0f
+#define HARM_FREQ_3         350.0f
+#define HARM_FREQ_4           0.0f
+#define HARM_FREQ_5           0.0f
+#define HARM_FREQ_6           0.0f
+#define F_BW_HARM           15.0f   /* 带宽加宽 */
+#define HARM_KR_FACTOR       5.0f   /* 增益降低 */
 
 /* --- ADC 同步触发: 1=在 PWM 中心点触发(低噪声), 0=周期起点 --- */
 #define ADC_SYNC_SAMPLE        1
@@ -93,13 +99,13 @@
 
 /* ——— PWM 时基 (已验证) —————————————————————————————————————— */
 #define HRTIM_PRESCALER     HRTIM_PRESCALERRATIO_DIV1
-#define MASTER_PERIOD        849U
+#define MASTER_PERIOD       1699U
 #define PWM_PERIOD           MASTER_PERIOD
-#define PWM_PERIOD_F         ((float)(MASTER_PERIOD + 1U))  /* 850.0 */
+#define PWM_PERIOD_F         ((float)(MASTER_PERIOD + 1U))  /* 1700.0 */
 #define F_SW                100000.0f
 
-#define DT_PRESCALER        HRTIM_TIMDEADTIME_PRESCALERRATIO_MUL8
-#define DT_VALUE             8U
+#define DT_PRESCALER        HRTIM_TIMDEADTIME_PRESCALERRATIO_DIV2
+#define DT_VALUE            34U  /* 死区 ≈ 34 / (170MHz/2) = 400ns */
 
 /* ——— ISR ——————————————————————————————————————————————————— */
 #define TIM6_PSC             169U
@@ -109,7 +115,7 @@
 
 /* ——— 正弦查表 ——————————————————————————————————————————————— */
 #define SIN_TABLE_SIZE       256U
-#define SIN_TABLE_STEP      ((float)(SIN_TABLE_SIZE * F_OUT / ISR_FREQ))
+#define SIN_INV_256          (1.0f / 256.0f)
 #define INV_TWOPI            ((float)(2.0 * 3.14159265358979323846))
 #define INV_SQRT2            ((float)(1.4142135623730951))
 
@@ -140,8 +146,9 @@
 /* 正弦表 (init 一次写入, ISR 只读) */
 static float sin_tab[SIN_TABLE_SIZE + 1U];
 
-/* 相位累加器 — ISR 写 */
-static volatile float s_phase_tab = 0.0f;
+/* 相位累加器 (uint32_t 无漂移) — ISR 写, init 写 step */
+static volatile uint32_t s_phase_acc = 0U;
+static uint32_t s_phase_step;       /* 每次 ISR 步进, 在 ComputeParams 中计算 */
 
 /* 目标电压 — 主循环写, ISR 读 */
 static volatile float s_vref_rms = VREF_RMS_INIT;
@@ -157,6 +164,7 @@ static float s_lpf_alpha;       /* 反馈低通系数                  */
 static volatile float s_vref_peak = 0.0f;  /* ISR 读, 主循环写 */
 
 /* ---- 多谐振控制器状态 (ISR 独占, 各 HARM_COUNT 组) ---- */
+#if HARM_COUNT > 0
 static float s_harm_w0[HARM_COUNT];
 static float s_harm_w0_sq[HARM_COUNT];
 static float s_harm_wc;
@@ -164,11 +172,11 @@ static float s_harm_two_wc;
 static float s_harm_Kr;
 static float s_harm_x1[HARM_COUNT];
 static float s_harm_x2[HARM_COUNT];
+#endif
 
 /* ---- PR 控制器状态 (ISR 独占) ---- */
 static float s_pr_x1     = 0.0f;
 static float s_pr_x2     = 0.0f;
-static float s_pr_e_prev = 0.0f;
 
 /* 反馈 LPF 状态 */
 static float s_vfb_filt  = 0.0f;
@@ -240,16 +248,10 @@ static HAL_StatusTypeDef Hbridge_ConfigTimerB(void)
 	s = HAL_HRTIM_TimeBaseConfig(&hhrtim1, HRTIM_IDX_B, &tb);
 	if (s != HAL_OK) return s;
 
-	ctl.UpDownMode = HRTIM_TIMERUPDOWNMODE_UPDOWN;
+	ctl.UpDownMode = HRTIM_TIMERUPDOWNMODE_UP;
 	ctl.GreaterCMP1 = HRTIM_TIMERGTCMP1_EQUAL;
 	ctl.DualChannelDacEnable = HRTIM_TIMER_DCDE_DISABLED;
 	s = HAL_HRTIM_WaveformTimerControl(&hhrtim1, HRTIM_IDX_B, &ctl);
-	if (s != HAL_OK) return s;
-
-	s = HAL_HRTIM_RollOverModeConfig(&hhrtim1, HRTIM_IDX_B,
-		HRTIM_TIM_FEROM_BOTH | HRTIM_TIM_BMROM_BOTH |
-		HRTIM_TIM_ADROM_BOTH | HRTIM_TIM_OUTROM_BOTH |
-		HRTIM_TIM_ROM_BOTH);
 	if (s != HAL_OK) return s;
 
 	cfg.InterruptRequests = HRTIM_TIM_IT_NONE;
@@ -262,7 +264,7 @@ static HAL_StatusTypeDef Hbridge_ConfigTimerB(void)
 	cfg.DeadTimeInsertion = HRTIM_TIMDEADTIMEINSERTION_ENABLED;
 	cfg.DelayedProtectionMode = HRTIM_TIMER_A_B_C_DELAYEDPROTECTION_DISABLED;
 	cfg.UpdateTrigger     = HRTIM_TIMUPDATETRIGGER_NONE;
-	cfg.ResetTrigger      = HRTIM_TIMRESETTRIGGER_MASTER_PER;
+	cfg.ResetTrigger      = HRTIM_TIMRESETTRIGGER_NONE;
 	cfg.ResetUpdate       = HRTIM_TIMUPDATEONRESET_DISABLED;
 	s = HAL_HRTIM_WaveformTimerConfig(&hhrtim1, HRTIM_IDX_B, &cfg);
 	if (s != HAL_OK) return s;
@@ -344,7 +346,7 @@ static void Hbridge_BuildSinTable(void)
 static void Hbridge_ComputeParams(void)
 {
 	const float l_total   = L1_VAL + L2_VAL;
-	const float r_min     = VREF_RMS_INIT / I_MAX_RMS;
+	const float r_min     = VREF_RMS_MAX / I_MAX_RMS;
 	const float ts        = ISR_TS;
 
 	/* —— 基础量 —— */
@@ -363,6 +365,7 @@ static void Hbridge_ComputeParams(void)
 	/* —— 3. Kp: 在 f_c 处 |Kp·Vdc·G_filter| = 1 —— */
 	const float g_filt_c = r_min / sqrtf(r_min*r_min + (w_c*l_total)*(w_c*l_total));
 	s_Kp = 1.0f / (VDC_BUS * g_filt_c);
+	if (s_Kp > 1.0f) s_Kp = 1.0f;
 
 	/* —— 4. 50 Hz 滤波器增益 —— */
 	const float g_50 = r_min / sqrtf(r_min*r_min + (w0*l_total)*(w0*l_total));
@@ -374,6 +377,7 @@ static void Hbridge_ComputeParams(void)
 	const float need_pr_gain = need_gain_50 / (VDC_BUS * g_50);
 	s_Kr = need_pr_gain - s_Kp;
 	if (s_Kr < s_Kp * 5.0f) s_Kr = s_Kp * 5.0f;
+	if (s_Kr > s_Kp * 200.0f) s_Kr = s_Kp * 200.0f;
 
 	/* —— 6. PR 谐振带宽 (须在相位裕度计算之前) —— */
 	s_wc_res     = INV_TWOPI * F_BW_RES;
@@ -401,6 +405,9 @@ static void Hbridge_ComputeParams(void)
 	s_lpf_alpha = INV_TWOPI * F_LPF_FB * ts;
 	if (s_lpf_alpha > 1.0f) s_lpf_alpha = 1.0f;
 
+	/* —— 8b. 相位累加器步进 (uint32_t 无漂移) —— */
+		s_phase_step = (uint32_t)(4294967296.0f * F_OUT / ISR_FREQ);
+
 	/* —— 9. 保存诊断值 —— */
 	s_w0           = w0;
 	s_w0_sq        = w0_sq;
@@ -408,18 +415,20 @@ static void Hbridge_ComputeParams(void)
 	s_ol_gain_50Hz = 20.0f * log10f((s_Kp + s_Kr) * VDC_BUS * g_50);
 
 	/* —— 10. 谐波谐振器参数 —— */
+#if HARM_COUNT > 0
 	s_harm_wc     = INV_TWOPI * F_BW_HARM;
 	s_harm_two_wc = 2.0f * s_harm_wc;
-	s_harm_Kr     = s_Kp * HARM_KR_FACTOR;
+	s_harm_Kr = s_Kp * HARM_KR_FACTOR;
+	if (s_harm_Kr > s_Kp * 50.0f) s_harm_Kr = s_Kp * 50.0f;
 
 	{
-		static const float harm_freq[HARM_COUNT] = {150.0f, 250.0f, 350.0f};
-		uint8_t h;
-		for (h = 0U; h < HARM_COUNT; h++) {
-			s_harm_w0[h]    = INV_TWOPI * harm_freq[h];
+		const float all_harm_freq[6] = {HARM_FREQ_1, HARM_FREQ_2, HARM_FREQ_3, HARM_FREQ_4, HARM_FREQ_5, HARM_FREQ_6};
+		for (uint8_t h = 0U; h < HARM_COUNT; h++) {
+			s_harm_w0[h]    = INV_TWOPI * all_harm_freq[h];
 			s_harm_w0_sq[h] = s_harm_w0[h] * s_harm_w0[h];
 		}
 	}
+#endif
 }
 
 /* ========================================================================
@@ -430,7 +439,7 @@ static void Hbridge_ComputeParams(void)
  *    e → PR 控制器 (Kp + 谐振部分) → u_pr
  *    d_mod = clamp(Vref·sin/Vdc + u_pr, ±0.9)
  *    duty_A = 0.5 + 0.5·d_mod,  duty_B = 0.5 - 0.5·d_mod
- *    CMP = duty × 850 → 写 HRTIM 寄存器 (preload)
+ *    CMP = duty × 1700 → 写 HRTIM 寄存器 (Preload=ON, 周期边界更新)
  *
  *  PR 谐振器离散实现 (forward Euler, Ts = 20 µs):
  *    ẋ₁ = x₂
@@ -455,15 +464,13 @@ static void Hbridge_ControlStep(void)
 	s_vfb_filt += s_lpf_alpha * (vfb_raw - s_vfb_filt);
 	vfb_sign = (float)PHASE_POLARITY * s_vfb_filt;
 
-	/* ---- 正弦参考 ---- */
-	s_phase_tab += SIN_TABLE_STEP;
-	if (s_phase_tab >= (float)SIN_TABLE_SIZE)
-		s_phase_tab -= (float)SIN_TABLE_SIZE;
-
+	/* ---- 正弦参考 (uint32_t无漂移) ---- */
+	s_phase_acc += s_phase_step;
 	{
-		uint32_t idx = (uint32_t)s_phase_tab;
-		float    frc = s_phase_tab - (float)idx;
-		float    sv  = sin_tab[idx]
+		uint32_t idx  = (s_phase_acc >> 24) & 0xFFU;
+		uint32_t frac = (s_phase_acc >> 16) & 0xFFU;
+		float    frc  = (float)frac * SIN_INV_256;
+		float    sv   = sin_tab[idx]
 		             + frc * (sin_tab[idx + 1U] - sin_tab[idx]);
 		vref_inst = s_vref_peak * sv;
 	}
@@ -476,57 +483,75 @@ static void Hbridge_ControlStep(void)
 	x2_old = s_pr_x2;
 
 	{
-		uint8_t  h;
+		float    y_harm = 0.0f;
+#if HARM_COUNT > 0
 		float    hx1_old[HARM_COUNT];
 		float    hx2_old[HARM_COUNT];
 		float    hx1_new[HARM_COUNT];
 		float    hx2_new[HARM_COUNT];
-		float    y_harm = 0.0f;
-
-		for (h = 0U; h < HARM_COUNT; h++) {
+		for (uint8_t h = 0U; h < HARM_COUNT; h++) {
 			hx1_old[h] = s_harm_x1[h];
 			hx2_old[h] = s_harm_x2[h];
 		}
+#endif
 
 		/* —— 基波谐振器 —— */
 		x1_new = x1_old + ts * x2_old;
 		x2_new = x2_old + ts * (-s_w0_sq * x1_old
 		                        - s_two_wc_res * x2_old
-		                        + s_pr_e_prev);
+		                        + err);
 		y_res  = s_Kr * s_two_wc_res * x2_new;
 
 		/* —— 谐波谐振器 (3rd=150Hz, 5th=250Hz, 7th=350Hz) —— */
-		for (h = 0U; h < HARM_COUNT; h++) {
+#if HARM_COUNT > 0
+		for (uint8_t h = 0U; h < HARM_COUNT; h++) {
 			hx1_new[h] = hx1_old[h] + ts * hx2_old[h];
 			hx2_new[h] = hx2_old[h] + ts * (-s_harm_w0_sq[h] * hx1_old[h]
 			                                - s_harm_two_wc   * hx2_old[h]
-			                                + s_pr_e_prev);
+			                                + err);
 			y_harm += s_harm_Kr * s_harm_two_wc * hx2_new[h];
 		}
+#endif
 
 		u_pr = s_Kp * err + y_res + y_harm;
 
-		/* ---- 前馈 + 总调制 + 限幅 ---- */
-		d_ff = vref_inst / VDC_BUS;
-		{
-			float raw    = d_ff + u_pr;
-			uint8_t sat  = 0U;
+			/* ---- 前馈 + 总调制 + 限幅 ---- */
+			d_ff = vref_inst / VDC_BUS;
+			{
+				float raw    = d_ff + u_pr;
+				uint8_t sat  = 0U;
 
-			if      (raw >  D_MOD_MAX) { d_mod =  D_MOD_MAX; sat = 1U; }
-			else if (raw < -D_MOD_MAX) { d_mod = -D_MOD_MAX; sat = 1U; }
-			else                       { d_mod = raw; }
+				if      (raw >  D_MOD_MAX) { d_mod =  D_MOD_MAX; sat = 1U; }
+				else if (raw < -D_MOD_MAX) { d_mod = -D_MOD_MAX; sat = 1U; }
+				else                       { d_mod = raw; }
 
-			/* 抗饱和: 条件不满足 → 所有谐振状态冻结 */
-			if (sat == 0U) {
-				s_pr_x1 = x1_new;  s_pr_x2 = x2_new;
-				for (h = 0U; h < HARM_COUNT; h++) {
-					s_harm_x1[h] = hx1_new[h];
-					s_harm_x2[h] = hx2_new[h];
+				/* 抗饱和: d_mod被钳位 → 冻结所有谐振状态 */
+				if (sat == 0U) {
+					s_pr_x1 = x1_new;  s_pr_x2 = x2_new;
+#if HARM_COUNT > 0
+					for (uint8_t h = 0U; h < HARM_COUNT; h++) {
+						s_harm_x1[h] = hx1_new[h];
+						s_harm_x2[h] = hx2_new[h];
+					}
+#endif
+					{
+						float abs_x;
+						abs_x = s_pr_x1; if (abs_x < 0.0f) abs_x = -abs_x;
+						if (abs_x > 100.0f) s_pr_x1 = (s_pr_x1 > 0.0f ? 100.0f : -100.0f);
+						abs_x = s_pr_x2; if (abs_x < 0.0f) abs_x = -abs_x;
+						if (abs_x > 10000.0f) s_pr_x2 = (s_pr_x2 > 0.0f ? 10000.0f : -10000.0f);
+#if HARM_COUNT > 0
+						for (uint8_t h = 0U; h < HARM_COUNT; h++) {
+							abs_x = s_harm_x1[h]; if (abs_x < 0.0f) abs_x = -abs_x;
+							if (abs_x > 100.0f) s_harm_x1[h] = (s_harm_x1[h] > 0.0f ? 100.0f : -100.0f);
+							abs_x = s_harm_x2[h]; if (abs_x < 0.0f) abs_x = -abs_x;
+							if (abs_x > 10000.0f) s_harm_x2[h] = (s_harm_x2[h] > 0.0f ? 10000.0f : -10000.0f);
+						}
+#endif
+					}
 				}
 			}
 		}
-	}
-	s_pr_e_prev = err;
 
 	/* ---- Bipolar SPWM ---- */
 	{
@@ -601,6 +626,9 @@ int main(void)
 
 	/* USER CODE BEGIN 2 */
 
+	/* DMA IRQ 优先级降到控制 ISR 以下, 避免抢占导致抖动 */
+	HAL_NVIC_SetPriority(DMA1_Channel2_IRQn, 6, 0);
+
 	HRTIM_TimeBaseCfgTypeDef tb = {0};
 
 	/* 1. MASTER */
@@ -612,13 +640,45 @@ int main(void)
 		Error_Handler();
 
 	/* 2. Timer A */
-	tb.Period = PWM_PERIOD;
-	if (HAL_HRTIM_TimeBaseConfig(&hhrtim1,HRTIM_IDX_A,&tb)!=HAL_OK) Error_Handler();
-	if (Hbridge_WriteDT(HRTIM_IDX_A)!=HAL_OK) Error_Handler();
-	if (Hbridge_WriteOut(HRTIM_IDX_A,HRTIM_OUTPUT_TA1,
-			HRTIM_OUTPUTSET_TIMPER,HRTIM_OUTPUTRESET_TIMCMP1)!=HAL_OK) Error_Handler();
-	if (Hbridge_WriteOut(HRTIM_IDX_A,HRTIM_OUTPUT_TA2,
-			HRTIM_OUTPUTSET_NONE,HRTIM_OUTPUTRESET_NONE)!=HAL_OK) Error_Handler();
+	{
+		HRTIM_TimerCtlTypeDef ctlA = {0};
+		HRTIM_TimerCfgTypeDef cfgA = {0};
+
+		tb.Period = PWM_PERIOD;
+		if (HAL_HRTIM_TimeBaseConfig(&hhrtim1,HRTIM_IDX_A,&tb)!=HAL_OK) Error_Handler();
+
+		ctlA.UpDownMode = HRTIM_TIMERUPDOWNMODE_UP;
+		ctlA.GreaterCMP1 = HRTIM_TIMERGTCMP1_EQUAL;
+		ctlA.DualChannelDacEnable = HRTIM_TIMER_DCDE_DISABLED;
+		if (HAL_HRTIM_WaveformTimerControl(&hhrtim1,HRTIM_IDX_A,&ctlA)!=HAL_OK) Error_Handler();
+
+
+		cfgA.InterruptRequests = HRTIM_TIM_IT_NONE;
+		cfgA.DMARequests       = HRTIM_TIM_DMA_NONE;
+		cfgA.PreloadEnable     = HRTIM_PRELOAD_ENABLED;
+		cfgA.RepetitionUpdate  = HRTIM_UPDATEONREPETITION_ENABLED;
+		cfgA.PushPull          = HRTIM_TIMPUSHPULLMODE_DISABLED;
+		cfgA.FaultEnable       = HRTIM_TIMFAULTENABLE_NONE;
+		cfgA.FaultLock         = HRTIM_TIMFAULTLOCK_READWRITE;
+		cfgA.DeadTimeInsertion = HRTIM_TIMDEADTIMEINSERTION_ENABLED;
+		cfgA.DelayedProtectionMode = HRTIM_TIMER_A_B_C_DELAYEDPROTECTION_DISABLED;
+		cfgA.UpdateTrigger     = HRTIM_TIMUPDATETRIGGER_NONE;
+		cfgA.ResetTrigger      = HRTIM_TIMRESETTRIGGER_NONE;
+		cfgA.ResetUpdate       = HRTIM_TIMUPDATEONRESET_DISABLED;
+		if (HAL_HRTIM_WaveformTimerConfig(&hhrtim1,HRTIM_IDX_A,&cfgA)!=HAL_OK) Error_Handler();
+		{
+			HRTIM_CompareCfgTypeDef cmpA = {0};
+			cmpA.CompareValue = (PWM_PERIOD + 1U) / 2U;
+			if (HAL_HRTIM_WaveformCompareConfig(&hhrtim1,HRTIM_IDX_A,
+				HRTIM_COMPAREUNIT_1,&cmpA)!=HAL_OK) Error_Handler();
+		}
+
+		if (Hbridge_WriteDT(HRTIM_IDX_A)!=HAL_OK) Error_Handler();
+		if (Hbridge_WriteOut(HRTIM_IDX_A,HRTIM_OUTPUT_TA1,
+				HRTIM_OUTPUTSET_TIMPER,HRTIM_OUTPUTRESET_TIMCMP1)!=HAL_OK) Error_Handler();
+		if (Hbridge_WriteOut(HRTIM_IDX_A,HRTIM_OUTPUT_TA2,
+				HRTIM_OUTPUTSET_NONE,HRTIM_OUTPUTRESET_NONE)!=HAL_OK) Error_Handler();
+	}
 
 	/* 3. Timer B */
 	if (Hbridge_ConfigTimerB()!=HAL_OK) Error_Handler();
@@ -654,7 +714,7 @@ int main(void)
 #if ADC_SYNC_SAMPLE
 	{
 		HRTIM_CompareCfgTypeDef mcmp = {0};
-		mcmp.CompareValue = MASTER_PERIOD / 2U;   /* 849/2 = 424 */
+		mcmp.CompareValue = MASTER_PERIOD / 2U;   /* 1699/2 = 849 */
 		HAL_HRTIM_WaveformCompareConfig(&hhrtim1, HRTIM_TIMERINDEX_MASTER,
 			HRTIM_COMPAREUNIT_1, &mcmp);
 
