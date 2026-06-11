@@ -38,16 +38,16 @@
 /* USER CODE BEGIN PD */
 
 /* ---------- 功率级参数 ---------- */
-#define VDC_BUS            48.0f    /* 直流母线电压 (V)                          */
+#define VDC_BUS           30.0f    /* 直流母线电压 (V)                          */
 #define L1_VAL             0.001f   /* 逆变器侧电感 (H)                          */
 #define L2_VAL             0.001f   /* 负载侧电感 (H)                            */
-#define C_VAL              0.000001f /* 滤波电容 (F), f_res = 1/(2π)*√((L1+L2)/(L1*L2*C)) ≈ 7120Hz */
+#define C_VAL              0.000002f /* 滤波电容 (F), f_res = 1/(2π)*√((L1+L2)/(L1*L2*C)) ≈ 7120Hz */
 
 /* ---------- 输出规格 ---------- */
-#define VREF_RMS_INIT       1.0f    /* 上电默认输出 RMS (V), 调试后改为目标值     */
+#define VREF_RMS_INIT       20.0f    /* 上电默认输出 RMS (V), 调试后改为目标值     */
 #define F_OUT              50.0f    /* 输出基波频率 (Hz)                          */
-#define I_MAX_RMS           7.0f    /* 过流保护阈值 (A RMS), 触发后强制 Vref=1V   */
-#define VREF_RMS_MIN        1.0f    /* 旋钮可调下限 (V)                           */
+#define I_MAX_RMS           10.0f    /* 过流保护阈值 (A RMS), 触发后强制 Vref=1V   */
+#define VREF_RMS_MIN        20.0f    /* 旋钮可调下限 (V)                           */
 #define VREF_RMS_MAX       30.0f    /* 旋钮可调上限 (V)                           */
 #define VREF_ENC_STEP       1.0f    /* 旋钮每格电压变化量 (V)                     */
 
@@ -841,12 +841,26 @@ int main(void)
 	}
 #endif
 
-	/* ---- 11. OLED 显示上电画面 ---- */
+	/* ---- 11. OLED 初始化 + 阻塞清屏 (绕过DMA验证I2C硬件) ---- */
 	if (OLEDGFX_Init()==OLEDGFX_OK) {
-		OLED_Redraw();
+		/* 阻塞I2C直接写全零帧到SSD1306 GDDRAM, 逐个命令发送 (与oledll.c一致) */
+		{
+			static uint8_t clr[1024];  /* BSS段零初始化 */
+			uint8_t i;
+			/* 设列地址 0-127: cmd 0x21 + data 0x00,0x7F */
+			uint8_t c1=0x21U; HAL_I2C_Mem_Write(&hi2c1,0x78U,0x00U,I2C_MEMADD_SIZE_8BIT,&c1,1,100U);
+			uint8_t d1[]={0x00U,0x7FU}; HAL_I2C_Mem_Write(&hi2c1,0x78U,0x40U,I2C_MEMADD_SIZE_8BIT,d1,2,100U);
+			/* 设页地址 0-7: cmd 0x22 + data 0x00,0x07 */
+			uint8_t c2=0x22U; HAL_I2C_Mem_Write(&hi2c1,0x78U,0x00U,I2C_MEMADD_SIZE_8BIT,&c2,1,100U);
+			uint8_t d2[]={0x00U,0x07U}; HAL_I2C_Mem_Write(&hi2c1,0x78U,0x40U,I2C_MEMADD_SIZE_8BIT,d2,2,100U);
+			/* 发送1024字节全零数据 (D/C#=1数据模式, 覆盖全部GDDRAM) */
+			HAL_I2C_Mem_Write(&hi2c1,0x78U,0x40U,I2C_MEMADD_SIZE_8BIT,clr,sizeof(clr),200U);
+		}
+		/* GFX层同步初始化, 供主循环后续刷新使用 */
+		OLEDGFX_Clear();
+		OLEDGFX_Submit();
 		OLEDGFX_Update();
 	}
-
 	/* ---- 12. TIM6 ISR 启动 (最后一步, 启动后闭环即刻运行) ---- */
 	TIM6->PSC=TIM6_PSC; TIM6->ARR=TIM6_ARR; TIM6->EGR=TIM_EGR_UG; TIM6->SR=0U;
 	HAL_NVIC_SetPriority(TIM6_DAC_IRQn,5U,0U); HAL_NVIC_EnableIRQ(TIM6_DAC_IRQn);
