@@ -49,7 +49,7 @@
 #define I_MAX_RMS           7.0f    /* 过流保护阈值 (A RMS), 触发后强制 Vref=1V   */
 #define VREF_RMS_MIN        1.0f    /* 旋钮可调下限 (V)                           */
 #define VREF_RMS_MAX       30.0f    /* 旋钮可调上限 (V)                           */
-#define VREF_ENC_STEP       0.5f    /* 旋钮每格电压变化量 (V)                     */
+#define VREF_ENC_STEP       1.0f    /* 旋钮每格电压变化量 (V)                     */
 
 /* ---------- 控制性能目标 ----------
  *  f_c_target : 期望开环交叉频率 (Hz). 越大→响应越快, 但过近 f_res 会振荡.
@@ -84,8 +84,8 @@
 #define F_BW_HARM           15.0f    /* 谐波谐振带宽 (Hz), 比基波宽以增强鲁棒性      */
 #define HARM_KR_FACTOR       5.0f    /* 谐波 Kr = 基波 Kp × 此系数, 降低避免过调     */
 
-/* ---------- ADC 触发: 1=在PWM中点触发(低噪声), 0=周期起点 ---------- */
-#define ADC_SYNC_SAMPLE        1
+/* ---------- ADC 触发: 1=在PWM中点触发, 0=周期起点(PERIOD事件, 推荐) ---------- */
+#define ADC_SYNC_SAMPLE        0
 
 /* ==========================================================================
  *  以下为自动推导参数 — 由 Hbridge_ComputeParams() 使用, 无需手动修改
@@ -171,6 +171,9 @@ static float s_w0;              /* ω₀ = 2π·F_OUT (rad/s)                   
 static float s_w0_sq;           /* ω₀²                                              */
 static float s_wc_res;          /* ωc_res = 2π·F_BW_RES, PR谐振带宽 (rad/s)       */
 static float s_two_wc_res;      /* 2·ωc_res, 减少ISR中乘法                        */
+
+/* ---- 基波PR Tustin离散化系数 (Ts=20µs) ---- */
+static float s_pr_a11, s_pr_a12, s_pr_a21, s_pr_a22, s_pr_b1;
 static float s_Kp;              /* 比例增益 (mod/V), 即每V误差产生的调制量         */
 static float s_Kr;              /* 谐振增益 (mod/V), 50Hz处Kp+Kr实现目标跟踪精度   */
 static float s_lpf_alpha;       /* 反馈LPF系数, α=2π·f_lpf·Ts, ≤1.0              */
@@ -183,8 +186,15 @@ static float s_harm_w0_sq[HARM_COUNT];   /* ω₀²                             
 static float s_harm_wc;                  /* 谐波谐振带宽 (rad/s)                    */
 static float s_harm_two_wc;              /* 2·ωc_harm                              */
 static float s_harm_Kr;                  /* 谐波谐振增益 (mod/V)                    */
-static float s_harm_x1[HARM_COUNT];      /* 谐波状态x1 (积分)                       */
-static float s_harm_x2[HARM_COUNT];      /* 谐波状态x2 (微分)                       */
+static float s_harm_x1[HARM_COUNT];      /* 谐波状态x1                              */
+static float s_harm_x2[HARM_COUNT];      /* 谐波状态x2                              */
+
+/* ---- 谐波PR Tustin离散化系数 ---- */
+static float s_harm_a11[HARM_COUNT];     /* Tustin系数 a11, 各谐波独立               */
+static float s_harm_a12[HARM_COUNT];     /* Tustin系数 a12 (=b2), 各谐波独立          */
+static float s_harm_a21[HARM_COUNT];     /* Tustin系数 a21, 各谐波独立               */
+static float s_harm_a22[HARM_COUNT];     /* Tustin系数 a22, 各谐波独立               */
+static float s_harm_b1[HARM_COUNT];      /* Tustin系数 b1=a12*Ts/2, 各谐波独立       */
 #endif
 
 /* ---- 基波PR控制器状态: ISR独占 ---- */
@@ -396,8 +406,19 @@ static void Hbridge_ComputeParams(void)
 	if (s_Kr > s_Kp * 200.0f) s_Kr = s_Kp * 200.0f;               /* 上界: 防ERR过小炸Kr  */
 
 	/* ---- 基波PR谐振带宽 ---- */
-	s_wc_res     = INV_TWOPI * F_BW_RES;                            /* 2π×=5 31.4 rad/s    */
+	s_wc_res     = INV_TWOPI * F_BW_RES;                            /* 2π×5 = 31.4 rad/s   */
 	s_two_wc_res = 2.0f * s_wc_res;
+
+	/* ---- 基波Tustin离散化系数 (替换前向欧拉, 消除高频频率畸变) ---- */
+	{
+		const float h2 = ts * 0.5f;
+		const float det = 1.0f + h2 * s_two_wc_res + h2 * h2 * s_w0_sq;
+		s_pr_a11 = (1.0f + h2 * s_two_wc_res - h2 * h2 * s_w0_sq) / det;
+		s_pr_a12 = ts / det;
+		s_pr_a21 = (-ts * s_w0_sq) / det;
+		s_pr_a22 = (1.0f - h2 * s_two_wc_res - h2 * h2 * s_w0_sq) / det;
+		s_pr_b1  = s_pr_a12 * h2;
+	}
 
 	/* ---- 相位裕度估算 (在f_c处) ---- */
 	{
@@ -446,6 +467,20 @@ static void Hbridge_ComputeParams(void)
 			s_harm_w0_sq[h] = s_harm_w0[h] * s_harm_w0[h];
 		}
 	}
+
+
+	/* 各谐波Tustin离散化系数 (独立计算, 替代前向欧拉) */
+	{
+		const float h2 = ts * 0.5f;
+		for (uint8_t h = 0U; h < HARM_COUNT; h++) {
+			const float det = 1.0f + h2 * s_harm_two_wc + h2 * h2 * s_harm_w0_sq[h];
+			s_harm_a11[h] = (1.0f + h2 * s_harm_two_wc - h2 * h2 * s_harm_w0_sq[h]) / det;
+			s_harm_a12[h] = ts / det;
+			s_harm_a21[h] = (-ts * s_harm_w0_sq[h]) / det;
+			s_harm_a22[h] = (1.0f - h2 * s_harm_two_wc - h2 * h2 * s_harm_w0_sq[h]) / det;
+			s_harm_b1[h]  = s_harm_a12[h] * h2;
+		}
+	}
 #endif
 }
 
@@ -471,7 +506,7 @@ static void Hbridge_ComputeParams(void)
  *
  *   ④ PR 控制器 (基波 + 谐波)
  *     基波 谐振器:
- *       ẋ₁ = x₂,  ẋ₂ = -ω₀²·x₁ - 2ωc_res·x₂ + err    (前向欧拉离散化)
+ *       ẋ₁ = x₂,  ẋ₂ = -ω₀²·x₁ - 2ωc_res·x₂ + err    (Tustin双线性变换)
  *       y_res = Kr × 2ωc_res × x₂_new
  *     谐波 谐振器 (×HARM_COUNT):
  *       同结构, 各用独立ω₀但共享ωc_harm和Kr_harm
@@ -490,12 +525,11 @@ static void Hbridge_ComputeParams(void)
  *     cmp_a = da × 1700, cmp_b = db × 1700        ← Period=1699, scale=1700
  *     CMP_WR → preload寄存器 → 计数器归零时生效
  *
- *   ⑦ 状态钳位 (防前向欧拉长期漂移, 正常运行时不会触发)
+ *   ⑦ 状态钳位 (防数值漂移, 正常运行时不会触发)
  *     |x1| ≤ 100, |x2| ≤ 10000
  */
 static void Hbridge_ControlStep(void)
 {
-	const float ts    = ISR_TS;               /* 20µs                            */
 	const float scale = PWM_PERIOD_F;         /* 1700.0, duty→CMP换算            */
 
 	float vfb_raw, vfb_sign, vref_inst, err;
@@ -539,23 +573,24 @@ static void Hbridge_ControlStep(void)
 		}
 #endif
 
-		/* 基波谐振器: 前向欧拉, 状态空间 */
-		x1_new = x1_old + ts * x2_old;
-		x2_new = x2_old + ts * (-s_w0_sq * x1_old
-		                        - s_two_wc_res * x2_old
-		                        + err);
-		y_res  = s_Kr * s_two_wc_res * x2_new;
+			/* 基波谐振器: Tustin双线性变换, 状态空间 */
+			{
+				float b2_err = s_pr_a12 * err;
+				x1_new = s_pr_a11 * x1_old + s_pr_a12 * x2_old + s_pr_b1 * err;
+				x2_new = s_pr_a21 * x1_old + s_pr_a22 * x2_old + b2_err;
+			}
+			y_res  = s_Kr * s_two_wc_res * x2_new;
 
-		/* 谐波谐振器: 每个独立计算, 累加输出 */
+			/* 谐波谐振器: Tustin双线性变换, 各谐波独立 */
 #if HARM_COUNT > 0
-		for (uint8_t h = 0U; h < HARM_COUNT; h++) {
-			hx1_new[h] = hx1_old[h] + ts * hx2_old[h];
-			hx2_new[h] = hx2_old[h] + ts * (-s_harm_w0_sq[h] * hx1_old[h]
-			                                - s_harm_two_wc   * hx2_old[h]
-			                                + err);
-			y_harm += s_harm_Kr * s_harm_two_wc * hx2_new[h];
-		}
+			for (uint8_t h = 0U; h < HARM_COUNT; h++) {
+				float b2_err = s_harm_a12[h] * err;
+				hx1_new[h] = s_harm_a11[h] * hx1_old[h] + s_harm_a12[h] * hx2_old[h] + s_harm_b1[h] * err;
+				hx2_new[h] = s_harm_a21[h] * hx1_old[h] + s_harm_a22[h] * hx2_old[h] + b2_err;
+				y_harm += s_harm_Kr * s_harm_two_wc * hx2_new[h];
+			}
 #endif
+
 
 		u_pr = s_Kp * err + y_res + y_harm;
 
@@ -578,7 +613,7 @@ static void Hbridge_ControlStep(void)
 					s_harm_x2[h] = hx2_new[h];
 				}
 #endif
-				/* 状态幅值钳位: 防前向欧拉长期漂移, 阈值远大于正常值 */
+				/* 状态幅值钳位: 防数值漂移, 阈值远大于正常值 */
 				{
 					float abs_x;
 					abs_x = s_pr_x1; if (abs_x < 0.0f) abs_x = -abs_x;
@@ -684,7 +719,7 @@ static void OLED_Redraw(void)
  *    8. 控制参数自动计算
  *    9. 编码器 / LED
  *   10. ADC采样启动 (校准→注入→DMA)
- *   11. ADC触发同步到PWM中点
+ *   11. ADC触发 (PERIOD事件, CubeMX默认)
  *   12. OLED初始化+上电画面
  *   13. TIM6 ISR启动 (最后一步, 启动后闭环即开始运行)
  *
@@ -790,7 +825,8 @@ int main(void)
 	if (Sample_Init()!=SAMPLE_OK) { LED_SetLED2State(1U); }
 	ADC_RMS_Reset();  s_adc_last_ms = HAL_GetTick();
 
-	/* ---- 10. ADC触发同步到PWM中点 (Master CMP1=849/1700 → 低开关噪声) ---- */
+	/* ---- 10. ADC触发 (CubeMX MASTER_PERIOD, 周期起点采样, 远离开关噪声) ---- */
+/* 10b. [备用] 设为ADC_SYNC_SAMPLE=1时将触发改为MASTER_CMP1中点, 默认0使用MASTER_PERIOD */
 #if ADC_SYNC_SAMPLE
 	{
 		HRTIM_CompareCfgTypeDef mcmp = {0};
