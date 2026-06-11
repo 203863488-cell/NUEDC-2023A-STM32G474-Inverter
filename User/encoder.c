@@ -114,8 +114,12 @@ int16_t Encoder_PopCount(void)
 
 	primask = Encoder_EnterCritical();
 	rawCount = (int16_t)__HAL_TIM_GET_COUNTER(s_encoderCtx.htim);
-	delta = (int16_t)(rawCount / (int16_t)ENCODER_COUNT_SCALE);
-	remainder = (int16_t)(rawCount % (int16_t)ENCODER_COUNT_SCALE);
+	delta = rawCount / (int16_t)ENCODER_COUNT_SCALE;
+	remainder = rawCount - delta * (int16_t)ENCODER_COUNT_SCALE;
+	if (remainder < 0) {
+		remainder += (int16_t)ENCODER_COUNT_SCALE;
+		delta--;
+	}
 	__HAL_TIM_SET_COUNTER(s_encoderCtx.htim, (uint16_t)remainder);
 	Encoder_ExitCritical(primask);
 
