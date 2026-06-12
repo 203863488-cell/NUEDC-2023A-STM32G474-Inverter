@@ -38,18 +38,22 @@
 /* USER CODE BEGIN PD */
 
 /* ---------- 功率级参数 ---------- */
-#define VDC_BUS           30.0f    /* 直流母线电压 (V)                          */
+#define VDC_BUS           32.0f    /* 直流母线电压 (V)                          */
 #define L1_VAL             0.001f   /* 逆变器侧电感 (H)                          */
 #define L2_VAL             0.001f   /* 负载侧电感 (H)                            */
 #define C_VAL              0.000002f /* 滤波电容 (F), f_res = 1/(2π)*√((L1+L2)/(L1*L2*C)) ≈ 7120Hz */
 
 /* ---------- 输出规格 ---------- */
-#define VREF_RMS_INIT       20.0f    /* 上电默认输出 RMS (V), 调试后改为目标值     */
-#define F_OUT              50.0f    /* 输出基波频率 (Hz)                          */
+#define VREF_RMS_INIT       10.0f    /* 上电默认输出 RMS (V), 调试后改为目标值     */
+#define F_OUT              105.55f   /* 实测校准值: 当前硬件输出约50Hz              */
 #define I_MAX_RMS           10.0f    /* 过流保护阈值 (A RMS), 触发后强制 Vref=1V   */
-#define VREF_RMS_MIN        20.0f    /* 旋钮可调下限 (V)                           */
+#define I_FAST_TRIP_A       (2.0f * I_MAX_RMS)
+#define VREF_RMS_MIN        1.0f     /* 旋钮可调下限 (V)                           */
 #define VREF_RMS_MAX       30.0f    /* 旋钮可调上限 (V)                           */
 #define VREF_ENC_STEP       1.0f    /* 旋钮每格电压变化量 (V)                     */
+#define VREF_RMS_START      0.0f     /* Soft-start output from 0 V RMS. */
+#define VREF_RMS_FAULT      1.0f     /* Low-power target after over-current. */
+#define VREF_RAMP_V_PER_S  40.0f     /* Reference ramp rate in V/s. */
 
 /* ---------- 控制性能目标 ----------
  *  f_c_target : 期望开环交叉频率 (Hz). 越大→响应越快, 但过近 f_res 会振荡.
@@ -59,11 +63,11 @@
  *  err_pct    : 期望稳态跟踪误差 (%). 值越小→Kr越大→50Hz处开环增益越高.
  *  f_lpf_fb   : 反馈ADC低通截止 (Hz). 用于衰减LCL谐振峰, 建议 f_res/3~f_res/5.
  * ---------- */
-#define F_C_TARGET         200.0f    /* 目标交叉频率 (Hz), 极保守, 调试后可提高    */
-#define PM_TARGET           75.0f    /* 目标相位裕度 (°)                           */
-#define F_BW_RES             5.0f    /* 基波PR谐振带宽 (Hz)                        */
-#define ERR_TRACK_PCT        3.0f    /* 期望跟踪误差 (%), 3%→开环增益≈33倍         */
-#define F_LPF_FB           600.0f    /* 反馈LPF截止 (Hz), 深度滤除LCL谐振峰        */
+#define F_C_TARGET          50.0f    /* 目标交叉频率 (Hz), 进一步降低LC激励         */
+#define PM_TARGET           90.0f    /* 目标相位裕度 (°), 保守配置                  */
+#define F_BW_RES             1.2f    /* 基波PR谐振带宽 (Hz), 窄带提高稳态干净度    */
+#define ERR_TRACK_PCT        7.0f    /* 放宽跟踪误差以降低PR增益                    */
+#define F_LPF_FB           160.0f    /* 反馈LPF截止 (Hz), 更强抑制LC谐振            */
 
 /* ---------- 反馈极性 ----------
  * +1: ADC读数正→电压正, -1: 翻转. 若闭环发散/振荡→改此值.
@@ -74,18 +78,18 @@
  * HARM_COUNT=0 可完全禁用谐波补偿以提高稳定性.
  * 每个谐振器结构与基波PR相同, 独立带宽和增益.
  * ---------- */
-#define HARM_COUNT             3     /* 谐波数量                                    */
-#define HARM_FREQ_1         150.0f   /* 3次谐波 (Hz)                                */
-#define HARM_FREQ_2         250.0f   /* 5次谐波 (Hz)                                */
-#define HARM_FREQ_3         350.0f   /* 7次谐波 (Hz)                                */
+#define HARM_COUNT             3     /* 打开3/5/7次谐波PR, 使用低增益避免激振LC     */
+#define HARM_FREQ_1         (3.0f * F_OUT)   /* 3次谐波 (Hz)                       */
+#define HARM_FREQ_2         (5.0f * F_OUT)   /* 5次谐波 (Hz)                       */
+#define HARM_FREQ_3         (7.0f * F_OUT)   /* 7次谐波 (Hz)                       */
 #define HARM_FREQ_4           0.0f   /* 备用, 0=禁用                                 */
 #define HARM_FREQ_5           0.0f   /* 备用, 0=禁用                                 */
 #define HARM_FREQ_6           0.0f   /* 备用, 0=禁用                                 */
-#define F_BW_HARM           15.0f    /* 谐波谐振带宽 (Hz), 比基波宽以增强鲁棒性      */
-#define HARM_KR_FACTOR       5.0f    /* 谐波 Kr = 基波 Kp × 此系数, 降低避免过调     */
+#define F_BW_HARM            1.5f    /* 谐波PR窄带, 减少对LC谐振附近的能量注入       */
+#define HARM_KR_FACTOR       0.35f   /* 谐波PR低增益, 先保证闭环稳定                */
 
 /* ---------- ADC 触发: 1=在PWM中点触发, 0=周期起点(PERIOD事件, 推荐) ---------- */
-#define ADC_SYNC_SAMPLE        0
+#define ADC_SYNC_SAMPLE        1
 
 /* ==========================================================================
  *  以下为自动推导参数 — 由 Hbridge_ComputeParams() 使用, 无需手动修改
@@ -123,6 +127,7 @@
 #define SIN_INV_256          (1.0f / 256.0f)
 #define INV_TWOPI            ((float)(2.0 * 3.14159265358979323846))   /* = 2π, 注意命名 */
 #define INV_SQRT2            ((float)(1.4142135623730951))             /* = √2, RMS↔峰值  */
+#define RMS_FROM_PEAK        (1.0f / INV_SQRT2)
 
 /* ---------- 硬限幅 ----------
  * 调制比 d_mod ∈ [-0.9, 0.9], 对应占空比 duty ∈ [0.05, 0.95].
@@ -146,6 +151,7 @@
 #define RMS_WINDOW_MS         200U
 #define RMS_SAMPLE_MS           1U
 #define RMS_SAMPLE_CNT       (RMS_WINDOW_MS / RMS_SAMPLE_MS)
+#define OLED_REFRESH_MS       100U
 
 /* USER CODE END PD */
 /* USER CODE BEGIN PM */
@@ -164,7 +170,8 @@ static volatile uint32_t s_phase_acc = 0U;                  /* 当前相位, 0�
 static uint32_t s_phase_step;                                /* 每ISR步进值, ComputeParams中计算 */
 
 /* ---- 目标电压: 主循环写, ISR通过s_vref_peak间接读 ---- */
-static volatile float s_vref_rms = VREF_RMS_INIT;
+static volatile float s_vref_target_rms = VREF_RMS_INIT;
+static volatile float s_vref_rms = VREF_RMS_START;
 
 /* ---- 控制系数: ComputeParams写入, ISR只读 ---- */
 static float s_w0;              /* ω₀ = 2π·F_OUT (rad/s)                          */
@@ -214,7 +221,8 @@ static uint32_t s_adc_last_ms = 0U;      /* 上次采样时刻 (ms)             
 
 /* ---- OLED: 主循环独占 ---- */
 static uint32_t s_oled_timer  = 0U;      /* 上次刷新时刻 (ms)                        */
-static uint8_t  s_oled_dirty  = 1U;      /* 1=需要刷新                               */
+static volatile uint8_t s_oled_dirty = 1U;  /* 1=需要刷新, ISR/main共享               */
+static uint8_t  s_oled_ok     = 0U;
 
 /* ---- 诊断值: ComputeParams写入, 仅用于参考 ---- */
 static float s_f_res_est;                /* 估算LCL谐振频率 (Hz)                     */
@@ -229,6 +237,128 @@ void SystemClock_Config(void);
  *  HRTIM 辅助函数 — 封装 HAL 调用, 减少 main() 中重复代码
  * ========================================================================== */
 /* USER CODE BEGIN 0 */
+
+static float Hbridge_MaxCommandRms(void)
+{
+	float max_rms = VDC_BUS * D_MOD_MAX * RMS_FROM_PEAK;
+	if (max_rms > VREF_RMS_MAX) {
+		max_rms = VREF_RMS_MAX;
+	}
+	if (max_rms < VREF_RMS_MIN) {
+		max_rms = VREF_RMS_MIN;
+	}
+	return max_rms;
+}
+
+static float Hbridge_ClampVrefRms(float rms)
+{
+	const float max_rms = Hbridge_MaxCommandRms();
+	if (rms > max_rms) {
+		rms = max_rms;
+	} else if (rms < VREF_RMS_MIN) {
+		rms = VREF_RMS_MIN;
+	}
+	return rms;
+}
+
+static void Hbridge_SetTargetRms(float rms)
+{
+	s_vref_target_rms = Hbridge_ClampVrefRms(rms);
+	s_oled_dirty = 1U;
+}
+
+static void Hbridge_ResetControlState(void)
+{
+	s_phase_acc = 0U;
+	s_pr_x1 = 0.0f;
+	s_pr_x2 = 0.0f;
+#if HARM_COUNT > 0
+	for (uint8_t h = 0U; h < HARM_COUNT; h++) {
+		s_harm_x1[h] = 0.0f;
+		s_harm_x2[h] = 0.0f;
+	}
+#endif
+}
+
+static float Hbridge_UpdateReferenceRamp(void)
+{
+	float target = Hbridge_ClampVrefRms(s_vref_target_rms);
+	float current = s_vref_rms;
+	const float step = VREF_RAMP_V_PER_S * ISR_TS;
+
+	if (target != s_vref_target_rms) {
+		s_vref_target_rms = target;
+	}
+
+	if ((target <= (VREF_RMS_FAULT + 0.001f)) && (current > target)) {
+		current = target;
+	} else if (current < target) {
+		current += step;
+		if (current > target) {
+			current = target;
+		}
+	} else if (current > target) {
+		current -= step;
+		if (current < target) {
+			current = target;
+		}
+	}
+
+	s_vref_rms = current;
+	s_vref_peak = current * INV_SQRT2;
+	return s_vref_peak;
+}
+
+static void Hbridge_PrimeFeedback(void)
+{
+	s_vfb_filt = Sample_GetTheoreticalVoltage(Sample_CH12);
+}
+
+static void Encoder_PrepareHardware(void)
+{
+	GPIO_InitTypeDef g = {0};
+
+	g.Pin = Encoder_A_Pin | Encoder_B_Pin;
+	g.Mode = GPIO_MODE_AF_PP;
+	g.Pull = GPIO_PULLUP;
+	g.Speed = GPIO_SPEED_FREQ_LOW;
+	g.Alternate = GPIO_AF2_TIM3;
+	HAL_GPIO_Init(Encoder_A_GPIO_Port, &g);
+
+	TIM3->CCMR1 = (TIM3->CCMR1 & ~(TIM_CCMR1_IC1F | TIM_CCMR1_IC2F))
+	            | (15U << TIM_CCMR1_IC1F_Pos)
+	            | (15U << TIM_CCMR1_IC2F_Pos);
+}
+
+static HAL_StatusTypeDef Hbridge_StartPowerStage(void)
+{
+	const uint16_t half = (uint16_t)((PWM_PERIOD + 1U) / 2U);
+
+	CMP_WR(HRTIM_IDX_A, half);
+	CMP_WR(HRTIM_IDX_B, half);
+
+	if (HAL_HRTIM_WaveformCounterStart(&hhrtim1, HRTIM_TIMERID_TIMER_A) != HAL_OK) return HAL_ERROR;
+	if (HAL_HRTIM_WaveformCounterStart(&hhrtim1, HRTIM_TIMERID_TIMER_B) != HAL_OK) return HAL_ERROR;
+	if (HAL_HRTIM_WaveformOutputStart(&hhrtim1, HRTIM_OUTPUT_TA1) != HAL_OK) return HAL_ERROR;
+	if (HAL_HRTIM_WaveformOutputStart(&hhrtim1, HRTIM_OUTPUT_TA2) != HAL_OK) return HAL_ERROR;
+	if (HAL_HRTIM_WaveformOutputStart(&hhrtim1, HRTIM_OUTPUT_TB1) != HAL_OK) return HAL_ERROR;
+	if (HAL_HRTIM_WaveformOutputStart(&hhrtim1, HRTIM_OUTPUT_TB2) != HAL_OK) return HAL_ERROR;
+	return HAL_OK;
+}
+
+static void Hbridge_StopPowerStage(void)
+{
+	if (hhrtim1.Instance != HRTIM1) {
+		return;
+	}
+
+	(void)HAL_HRTIM_WaveformOutputStop(&hhrtim1, HRTIM_OUTPUT_TA1);
+	(void)HAL_HRTIM_WaveformOutputStop(&hhrtim1, HRTIM_OUTPUT_TA2);
+	(void)HAL_HRTIM_WaveformOutputStop(&hhrtim1, HRTIM_OUTPUT_TB1);
+	(void)HAL_HRTIM_WaveformOutputStop(&hhrtim1, HRTIM_OUTPUT_TB2);
+	(void)HAL_HRTIM_WaveformCounterStop(&hhrtim1, HRTIM_TIMERID_TIMER_A);
+	(void)HAL_HRTIM_WaveformCounterStop(&hhrtim1, HRTIM_TIMERID_TIMER_B);
+}
 
 /*
  * Hbridge_WriteOut — 配置单个 HRTIM 输出的 Set/Reset 源.
@@ -303,7 +433,7 @@ static HAL_StatusTypeDef Hbridge_ConfigTimerB(void)
 	cfg.DeadTimeInsertion = HRTIM_TIMDEADTIMEINSERTION_ENABLED;  /* 硬件自动生成TA2互补 */
 	cfg.DelayedProtectionMode = HRTIM_TIMER_A_B_C_DELAYEDPROTECTION_DISABLED;
 	cfg.UpdateTrigger     = HRTIM_TIMUPDATETRIGGER_NONE;
-	cfg.ResetTrigger      = HRTIM_TIMRESETTRIGGER_NONE;          /* 自由运行, 不与Master同步 */
+	cfg.ResetTrigger      = HRTIM_TIMRESETTRIGGER_MASTER_PER;
 	cfg.ResetUpdate       = HRTIM_TIMUPDATEONRESET_DISABLED;
 	s = HAL_HRTIM_WaveformTimerConfig(&hhrtim1, HRTIM_IDX_B, &cfg);
 	if (s != HAL_OK) return s;
@@ -380,7 +510,7 @@ static void Hbridge_ComputeParams(void)
 	const float ts        = ISR_TS;                                /* 采样周期 20µs      */
 
 	/* ---- 基波频率 ---- */
-	const float w0    = INV_TWOPI * F_OUT;                         /* 2π×50 = 314.16     */
+	const float w0    = INV_TWOPI * F_OUT;                         /* 2π×compensated F_OUT */
 	const float w0_sq = w0 * w0;
 
 	/* ---- LCL谐振频率 ---- */
@@ -399,24 +529,24 @@ static void Hbridge_ComputeParams(void)
 
 	/* ---- Kr: 满足50Hz跟踪误差 ---- */
 	const float g_50 = r_min / sqrtf(r_min*r_min + (w0*l_total)*(w0*l_total));
-	const float need_gain_50 = 100.0f / ERR_TRACK_PCT;             /* 需要开环增益 ~33×    */
+	const float need_gain_50 = 100.0f / ERR_TRACK_PCT;             /* 由ERR_TRACK_PCT决定 */
 	const float need_pr_gain = need_gain_50 / (VDC_BUS * g_50);
 	s_Kr = need_pr_gain - s_Kp;
 	if (s_Kr < s_Kp * 5.0f) s_Kr = s_Kp * 5.0f;                   /* 下界: Kr≥Kp×5       */
 	if (s_Kr > s_Kp * 200.0f) s_Kr = s_Kp * 200.0f;               /* 上界: 防ERR过小炸Kr  */
 
 	/* ---- 基波PR谐振带宽 ---- */
-	s_wc_res     = INV_TWOPI * F_BW_RES;                            /* 2π×5 = 31.4 rad/s   */
+	s_wc_res     = INV_TWOPI * F_BW_RES;                            /* 基波PR带宽 rad/s    */
 	s_two_wc_res = 2.0f * s_wc_res;
 
 	/* ---- 基波Tustin离散化系数 (替换前向欧拉, 消除高频频率畸变) ---- */
 	{
 		const float h2 = ts * 0.5f;
-		const float det = 1.0f + h2 * s_two_wc_res + h2 * h2 * s_w0_sq;
-		s_pr_a11 = (1.0f + h2 * s_two_wc_res - h2 * h2 * s_w0_sq) / det;
+		const float det = 1.0f + h2 * s_two_wc_res + h2 * h2 * w0_sq;
+		s_pr_a11 = (1.0f + h2 * s_two_wc_res - h2 * h2 * w0_sq) / det;
 		s_pr_a12 = ts / det;
-		s_pr_a21 = (-ts * s_w0_sq) / det;
-		s_pr_a22 = (1.0f - h2 * s_two_wc_res - h2 * h2 * s_w0_sq) / det;
+		s_pr_a21 = (-ts * w0_sq) / det;
+		s_pr_a22 = (1.0f - h2 * s_two_wc_res - h2 * h2 * w0_sq) / det;
 		s_pr_b1  = s_pr_a12 * h2;
 	}
 
@@ -437,7 +567,7 @@ static void Hbridge_ComputeParams(void)
 	}
 
 	/* ---- 反馈LPF系数: 一阶IIR, y+=α×(x-y) ---- */
-	s_lpf_alpha = INV_TWOPI * F_LPF_FB * ts;                       /* 2π×600×20µs ≈ 0.075 */
+	s_lpf_alpha = INV_TWOPI * F_LPF_FB * ts;                       /* 反馈低通系数        */
 	if (s_lpf_alpha > 1.0f) s_lpf_alpha = 1.0f;                   /* α>1→不稳定, 钳位    */
 
 	/* ---- 相位累加器步进: 2³²×50/50000 ≈ 4294967 ---- */
@@ -451,7 +581,7 @@ static void Hbridge_ComputeParams(void)
 
 	/* ---- 谐波谐振器参数 ---- */
 #if HARM_COUNT > 0
-	s_harm_wc     = INV_TWOPI * F_BW_HARM;                         /* 谐波带宽 2π×15     */
+	s_harm_wc     = INV_TWOPI * F_BW_HARM;                         /* 谐波PR带宽 rad/s    */
 	s_harm_two_wc = 2.0f * s_harm_wc;
 	s_harm_Kr = s_Kp * HARM_KR_FACTOR;
 	if (s_harm_Kr > s_Kp * 50.0f) s_harm_Kr = s_Kp * 50.0f;       /* 谐波增益上限        */
@@ -535,12 +665,32 @@ static void Hbridge_ControlStep(void)
 	float vfb_raw, vfb_sign, vref_inst, err;
 	float x1_old, x2_old, x1_new, x2_new, y_res, u_pr;
 	float d_ff, d_mod;
+	float vref_peak;
+	float ifb_abs;
 	uint16_t cmp_a, cmp_b;
+
+	vref_peak = Hbridge_UpdateReferenceRamp();
 
 	/* ① 读反馈 → LPF → 极性 */
 	vfb_raw = Sample_GetTheoreticalVoltage(Sample_CH12);
 	s_vfb_filt += s_lpf_alpha * (vfb_raw - s_vfb_filt);
 	vfb_sign = (float)PHASE_POLARITY * s_vfb_filt;
+
+	ifb_abs = Sample_GetTheoreticalCurrent(Sample_CH4);
+	if (ifb_abs < 0.0f) {
+		ifb_abs = -ifb_abs;
+	}
+	if (ifb_abs > I_FAST_TRIP_A) {
+		const uint16_t half = (uint16_t)((PWM_PERIOD + 1U) / 2U);
+		s_vref_target_rms = VREF_RMS_FAULT;
+		s_vref_rms = VREF_RMS_FAULT;
+		s_vref_peak = VREF_RMS_FAULT * INV_SQRT2;
+		Hbridge_ResetControlState();
+		CMP_WR(HRTIM_IDX_A, half);
+		CMP_WR(HRTIM_IDX_B, half);
+		s_oled_dirty = 1U;
+		return;
+	}
 
 	/* ② 正弦参考: uint32_t相位累加 → 查表+线性插值 */
 	s_phase_acc += s_phase_step;
@@ -550,7 +700,7 @@ static void Hbridge_ControlStep(void)
 		float    frc  = (float)frac * SIN_INV_256;
 		float    sv   = sin_tab[idx]
 		             + frc * (sin_tab[idx + 1U] - sin_tab[idx]);
-		vref_inst = s_vref_peak * sv;
+		vref_inst = vref_peak * sv;
 	}
 
 	/* ③ 误差 */
@@ -677,8 +827,10 @@ static void ADC_RMS_Task(void)
 /* OLED 四行显示: 标题 / Vo=xx.xV / Io=x.xxA / Set xx.xV [####] */
 static void OLED_Redraw(void)
 {
-	float r; uint8_t bl,i; char bar[7];
+	float r, target, max_rms; uint8_t bl,i; char bar[7];
 	OLEDGFX_Clear();
+	target = s_vref_target_rms;
+	max_rms = Hbridge_MaxCommandRms();
 
 	OLEDGFX_ShowString(OLEDGFX_COL_1, OLEDGFX_LINE_1,"H-BRIDGE INV",OLEDGFX_Clip);
 
@@ -691,14 +843,32 @@ static void OLED_Redraw(void)
 	OLEDGFX_ShowChar(OLEDGFX_COL_9,   OLEDGFX_LINE_3,'A');
 
 	OLEDGFX_ShowString(OLEDGFX_COL_1, OLEDGFX_LINE_4,"Set",OLEDGFX_Clip);
-	OLEDGFX_ShowFloat(OLEDGFX_COL_5,  OLEDGFX_LINE_4,s_vref_rms,2U,1U);
+	OLEDGFX_ShowFloat(OLEDGFX_COL_5,  OLEDGFX_LINE_4,target,2U,1U);
 	OLEDGFX_ShowChar(OLEDGFX_COL_10,  OLEDGFX_LINE_4,'V');
 
-	r =(s_vref_rms - VREF_RMS_MIN)/(VREF_RMS_MAX - VREF_RMS_MIN);
-	if(r<0.0f)r=0.0f; if(r>1.0f)r=1.0f; bl=(uint8_t)(r*4.0f+0.5f); if(bl>4U)bl=4U;
+	if (max_rms <= VREF_RMS_MIN) {
+		r = 1.0f;
+	} else {
+		r = (target - VREF_RMS_MIN) / (max_rms - VREF_RMS_MIN);
+	}
+	if (r < 0.0f) {
+		r = 0.0f;
+	}
+	if (r > 1.0f) {
+		r = 1.0f;
+	}
+	bl = (uint8_t)(r * 4.0f + 0.5f);
+	if (bl > 4U) {
+		bl = 4U;
+	}
 	bar[0]='['; bar[5]=']'; bar[6]='\0';
-	for(i=0U;i<bl;i++)bar[i+1U]='#'; for(i=bl;i<4U;i++)bar[i+1U]=' ';
-	OLEDGFX_ShowString(OLEDGFX_COL_12,OLEDGFX_LINE_4,bar,OLEDGFX_Clip);
+	for (i = 0U; i < bl; i++) {
+		bar[i + 1U] = '#';
+	}
+	for (i = bl; i < 4U; i++) {
+		bar[i + 1U] = ' ';
+	}
+	OLEDGFX_ShowString(OLEDGFX_COL_11,OLEDGFX_LINE_4,bar,OLEDGFX_Clip);
 
 	OLEDGFX_Submit();
 }
@@ -777,7 +947,7 @@ int main(void)
 		cfgA.DeadTimeInsertion = HRTIM_TIMDEADTIMEINSERTION_ENABLED;
 		cfgA.DelayedProtectionMode = HRTIM_TIMER_A_B_C_DELAYEDPROTECTION_DISABLED;
 		cfgA.UpdateTrigger     = HRTIM_TIMUPDATETRIGGER_NONE;
-		cfgA.ResetTrigger      = HRTIM_TIMRESETTRIGGER_NONE;
+		cfgA.ResetTrigger      = HRTIM_TIMRESETTRIGGER_MASTER_PER;
 		cfgA.ResetUpdate       = HRTIM_TIMUPDATEONRESET_DISABLED;
 		if (HAL_HRTIM_WaveformTimerConfig(&hhrtim1,HRTIM_IDX_A,&cfgA)!=HAL_OK) Error_Handler();
 
@@ -801,67 +971,53 @@ int main(void)
 	if (Hbridge_ConfigTimerB()!=HAL_OK) Error_Handler();
 
 	/* ---- 4. 启动定时器和所有输出 ---- */
-	HAL_HRTIM_WaveformCounterStart(&hhrtim1,HRTIM_TIMERID_TIMER_A);
-	HAL_HRTIM_WaveformCounterStart(&hhrtim1,HRTIM_TIMERID_TIMER_B);
-	HAL_HRTIM_WaveformOutputStart(&hhrtim1,HRTIM_OUTPUT_TA1);
-	HAL_HRTIM_WaveformOutputStart(&hhrtim1,HRTIM_OUTPUT_TA2);
-	HAL_HRTIM_WaveformOutputStart(&hhrtim1,HRTIM_OUTPUT_TB1);
-	HAL_HRTIM_WaveformOutputStart(&hhrtim1,HRTIM_OUTPUT_TB2);
+	CMP_WR(HRTIM_IDX_A, (PWM_PERIOD + 1U) / 2U);
+	CMP_WR(HRTIM_IDX_B, (PWM_PERIOD + 1U) / 2U);
 
 	/* ---- 5. 正弦查表 ---- */
 	Hbridge_BuildSinTable();
 
 	/* ---- 6. 自动计算所有控制参数 ---- */
 	Hbridge_ComputeParams();
+	Hbridge_ResetControlState();
 
 	/* ---- 7. 目标电压初始化 (在ISR启动前) ---- */
-	s_vref_peak = s_vref_rms * INV_SQRT2;
+	Hbridge_SetTargetRms(VREF_RMS_INIT);
+	s_vref_rms = VREF_RMS_START;
+	s_vref_peak = 0.0f;
 
 	/* ---- 8. 编码器 + LED ---- */
+	Encoder_PrepareHardware();
 	Encoder_Init();
 	LED_SetLED1State(1U); LED_SetLED2State(0U);
 
-	/* ---- 9. ADC 采样启动 (校准→注入→DMA) ---- */
-	if (Sample_Init()!=SAMPLE_OK) { LED_SetLED2State(1U); }
-	ADC_RMS_Reset();  s_adc_last_ms = HAL_GetTick();
-
-	/* ---- 10. ADC触发 (CubeMX MASTER_PERIOD, 周期起点采样, 远离开关噪声) ---- */
-/* 10b. [备用] 设为ADC_SYNC_SAMPLE=1时将触发改为MASTER_CMP1中点, 默认0使用MASTER_PERIOD */
 #if ADC_SYNC_SAMPLE
 	{
 		HRTIM_CompareCfgTypeDef mcmp = {0};
-		mcmp.CompareValue = MASTER_PERIOD / 2U;   /* 1699/2 = 849 */
+		HRTIM_ADCTriggerCfgTypeDef at = {0};
+		mcmp.CompareValue = (MASTER_PERIOD + 1U) / 2U;
 		HAL_HRTIM_WaveformCompareConfig(&hhrtim1, HRTIM_TIMERINDEX_MASTER,
 			HRTIM_COMPAREUNIT_1, &mcmp);
-
-		HRTIM_ADCTriggerCfgTypeDef at = {0};
 		at.UpdateSource = HRTIM_ADCTRIGGERUPDATE_MASTER;
 		at.Trigger = HRTIM_ADCTRIGGEREVENT13_MASTER_CMP1;
 		HAL_HRTIM_ADCTriggerConfig(&hhrtim1, HRTIM_ADCTRIGGER_1, &at);
 	}
 #endif
 
+	/* ---- 9. ADC 采样启动 (校准→注入→DMA) ---- */
+	if (Sample_Init()!=SAMPLE_OK) { LED_SetLED2State(1U); Error_Handler(); }
+	HAL_Delay(2U);
+	Hbridge_PrimeFeedback();
+	ADC_RMS_Reset();  s_adc_last_ms = HAL_GetTick();
+
 	/* ---- 11. OLED 初始化 + 阻塞清屏 (绕过DMA验证I2C硬件) ---- */
 	if (OLEDGFX_Init()==OLEDGFX_OK) {
-		/* 阻塞I2C直接写全零帧到SSD1306 GDDRAM, 逐个命令发送 (与oledll.c一致) */
-		{
-			static uint8_t clr[1024];  /* BSS段零初始化 */
-			uint8_t i;
-			/* 设列地址 0-127: cmd 0x21 + data 0x00,0x7F */
-			uint8_t c1=0x21U; HAL_I2C_Mem_Write(&hi2c1,0x78U,0x00U,I2C_MEMADD_SIZE_8BIT,&c1,1,100U);
-			uint8_t d1[]={0x00U,0x7FU}; HAL_I2C_Mem_Write(&hi2c1,0x78U,0x40U,I2C_MEMADD_SIZE_8BIT,d1,2,100U);
-			/* 设页地址 0-7: cmd 0x22 + data 0x00,0x07 */
-			uint8_t c2=0x22U; HAL_I2C_Mem_Write(&hi2c1,0x78U,0x00U,I2C_MEMADD_SIZE_8BIT,&c2,1,100U);
-			uint8_t d2[]={0x00U,0x07U}; HAL_I2C_Mem_Write(&hi2c1,0x78U,0x40U,I2C_MEMADD_SIZE_8BIT,d2,2,100U);
-			/* 发送1024字节全零数据 (D/C#=1数据模式, 覆盖全部GDDRAM) */
-			HAL_I2C_Mem_Write(&hi2c1,0x78U,0x40U,I2C_MEMADD_SIZE_8BIT,clr,sizeof(clr),200U);
-		}
-		/* GFX层同步初始化, 供主循环后续刷新使用 */
-		OLEDGFX_Clear();
-		OLEDGFX_Submit();
-		OLEDGFX_Update();
+		s_oled_ok = 1U;
+		OLED_Redraw();
+		(void)OLEDGFX_Update();
 	}
 	/* ---- 12. TIM6 ISR 启动 (最后一步, 启动后闭环即刻运行) ---- */
+	if (Hbridge_StartPowerStage()!=HAL_OK) Error_Handler();
 	TIM6->PSC=TIM6_PSC; TIM6->ARR=TIM6_ARR; TIM6->EGR=TIM_EGR_UG; TIM6->SR=0U;
 	HAL_NVIC_SetPriority(TIM6_DAC_IRQn,5U,0U); HAL_NVIC_EnableIRQ(TIM6_DAC_IRQn);
 	TIM6->DIER|=TIM_DIER_UIE;  TIM6->CR1|=TIM_CR1_CEN;
@@ -876,40 +1032,39 @@ int main(void)
 
 		/* 编码器旋钮: 调节目标电压, 钳位到 [VREF_RMS_MIN, VREF_RMS_MAX] */
 		{ int16_t d=Encoder_PopCount();
-		  if(d){ float nv=s_vref_rms+(float)d*VREF_ENC_STEP;
-		         if(nv>VREF_RMS_MAX)nv=VREF_RMS_MAX; else if(nv<VREF_RMS_MIN)nv=VREF_RMS_MIN;
-		         s_vref_rms=nv; s_vref_peak = nv * INV_SQRT2; s_oled_dirty=1U; } }
+		  if(d){ Hbridge_SetTargetRms(s_vref_target_rms + (float)d * VREF_ENC_STEP); } }
 
 		/* ADC RMS 计算: 每1ms采样, 200ms窗口 */
 		ADC_RMS_Task();
 
 		/* OLED 刷新: 每100ms更新一次, 其余时间仅驱动I2C传输 */
-		{ uint32_t t=HAL_GetTick();
-		  if(s_oled_dirty&&((t-s_oled_timer)>=100U)){s_oled_timer=t;s_oled_dirty=0U;OLED_Redraw();}
-		  OLEDGFX_Update(); }
+		if (s_oled_ok != 0U) {
+			uint32_t t=HAL_GetTick();
+			if(s_oled_dirty&&((t-s_oled_timer)>=OLED_REFRESH_MS)){s_oled_timer=t;s_oled_dirty=0U;OLED_Redraw();}
+			(void)OLEDGFX_Update();
+		}
 
 		/* 过流保护: Irms > I_MAX → 强制 Vref 降到最低, 手动恢复 */
-		if(s_i_rms>I_MAX_RMS){ s_vref_rms=VREF_RMS_MIN; s_vref_peak=VREF_RMS_MIN*INV_SQRT2; s_oled_dirty=1U; }
+		if(s_i_rms>I_MAX_RMS){ Hbridge_SetTargetRms(VREF_RMS_FAULT); }
 	}
 	/* USER CODE END 3 */
 }
 
 /*
- * SystemClock_Config — HSI→PLL→170MHz
- * HSI=16MHz, PLLM=/4→4MHz, PLLN=×85→340MHz, PLLR=/2→170MHz SYSCLK
- * HCLK=170MHz, PCLK1=170MHz, PCLK2=85MHz, FLASH=4WS
+ * SystemClock_Config - HSE 8MHz -> PLL -> 170MHz.
+ * HSE=8MHz, PLLM=/2 -> 4MHz, PLLN=x85 -> 340MHz, PLLR=/2 -> 170MHz SYSCLK.
+ * HCLK=170MHz, PCLK1=170MHz, PCLK2=85MHz, FLASH=4WS.
  */
 void SystemClock_Config(void)
 {
 	RCC_OscInitTypeDef RCC_OscInitStruct = {0};
 	RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
 	HAL_PWREx_ControlVoltageScaling(PWR_REGULATOR_VOLTAGE_SCALE1_BOOST);
-	RCC_OscInitStruct.OscillatorType=RCC_OSCILLATORTYPE_HSI;
-	RCC_OscInitStruct.HSIState=RCC_HSI_ON;
-	RCC_OscInitStruct.HSICalibrationValue=RCC_HSICALIBRATION_DEFAULT;
+	RCC_OscInitStruct.OscillatorType=RCC_OSCILLATORTYPE_HSE;
+	RCC_OscInitStruct.HSEState=RCC_HSE_ON;
 	RCC_OscInitStruct.PLL.PLLState=RCC_PLL_ON;
-	RCC_OscInitStruct.PLL.PLLSource=RCC_PLLSOURCE_HSI;
-	RCC_OscInitStruct.PLL.PLLM=RCC_PLLM_DIV4; RCC_OscInitStruct.PLL.PLLN=85;
+	RCC_OscInitStruct.PLL.PLLSource=RCC_PLLSOURCE_HSE;
+	RCC_OscInitStruct.PLL.PLLM=RCC_PLLM_DIV2; RCC_OscInitStruct.PLL.PLLN=85;
 	RCC_OscInitStruct.PLL.PLLP=RCC_PLLP_DIV2; RCC_OscInitStruct.PLL.PLLQ=RCC_PLLQ_DIV2;
 	RCC_OscInitStruct.PLL.PLLR=RCC_PLLR_DIV2;
 	if(HAL_RCC_OscConfig(&RCC_OscInitStruct)!=HAL_OK)Error_Handler();
@@ -947,7 +1102,7 @@ void HAL_I2C_ErrorCallback(I2C_HandleTypeDef*hi2c)
 { if(hi2c->Instance==I2C1)OLEDGFX_ErrorCallback(); }
 /* USER CODE END 4 */
 
-void Error_Handler(void){__disable_irq();while(1){}}
+void Error_Handler(void){Hbridge_StopPowerStage();__disable_irq();while(1){}}
 #ifdef USE_FULL_ASSERT
 void assert_failed(uint8_t*f,uint32_t l){(void)f;(void)l;}
 #endif
