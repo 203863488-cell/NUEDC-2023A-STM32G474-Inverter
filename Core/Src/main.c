@@ -38,13 +38,13 @@
 /* USER CODE BEGIN PD */
 
 /* ---------- 功率级参数 ---------- */
-#define VDC_BUS           32.0f    /* 直流母线电压 (V)                          */
+#define VDC_BUS           48.0f    /* 直流母线电压 (V)                          */
 #define L1_VAL             0.001f   /* 逆变器侧电感 (H)                          */
 #define L2_VAL             0.001f   /* 负载侧电感 (H)                            */
 #define C_VAL              0.000002f /* 滤波电容 (F), f_res = 1/(2π)*√((L1+L2)/(L1*L2*C)) ≈ 7120Hz */
 
 /* ---------- 输出规格 ---------- */
-#define VREF_RMS_INIT       10.0f    /* 上电默认输出 RMS (V), 调试后改为目标值     */
+#define VREF_RMS_INIT       24.0f    /* 上电默认输出 RMS (V), 调试后改为目标值     */
 #define F_OUT              105.55f   /* 实测校准值: 当前硬件输出约50Hz              */
 #define I_MAX_RMS           10.0f    /* 过流保护阈值 (A RMS), 触发后强制 Vref=1V   */
 #define I_FAST_TRIP_A       (2.0f * I_MAX_RMS)
@@ -151,7 +151,7 @@
 #define RMS_WINDOW_MS         200U
 #define RMS_SAMPLE_MS           1U
 #define RMS_SAMPLE_CNT       (RMS_WINDOW_MS / RMS_SAMPLE_MS)
-#define OLED_REFRESH_MS       100U
+#define OLED_REFRESH_MS       200U
 
 /* USER CODE END PD */
 /* USER CODE BEGIN PM */
@@ -328,6 +328,28 @@ static void Encoder_PrepareHardware(void)
 	TIM3->CCMR1 = (TIM3->CCMR1 & ~(TIM_CCMR1_IC1F | TIM_CCMR1_IC2F))
 	            | (15U << TIM_CCMR1_IC1F_Pos)
 	            | (15U << TIM_CCMR1_IC2F_Pos);
+}
+
+static void OLED_PrepareI2CBus(void)
+{
+	GPIO_InitTypeDef g = {0};
+
+	__HAL_RCC_GPIOA_CLK_ENABLE();
+	__HAL_RCC_GPIOB_CLK_ENABLE();
+
+	g.Mode = GPIO_MODE_AF_OD;
+	g.Pull = GPIO_PULLUP;
+	g.Speed = GPIO_SPEED_FREQ_LOW;
+	g.Alternate = GPIO_AF4_I2C1;
+
+	g.Pin = GPIO_PIN_15;
+	HAL_GPIO_Init(GPIOA, &g);
+
+	g.Pin = GPIO_PIN_9;
+	HAL_GPIO_Init(GPIOB, &g);
+
+	(void)HAL_I2CEx_ConfigAnalogFilter(&hi2c1, I2C_ANALOGFILTER_ENABLE);
+	(void)HAL_I2CEx_ConfigDigitalFilter(&hi2c1, 2U);
 }
 
 static HAL_StatusTypeDef Hbridge_StartPowerStage(void)
@@ -988,6 +1010,7 @@ int main(void)
 
 	/* ---- 8. 编码器 + LED ---- */
 	Encoder_PrepareHardware();
+	OLED_PrepareI2CBus();
 	Encoder_Init();
 	LED_SetLED1State(1U); LED_SetLED2State(0U);
 
