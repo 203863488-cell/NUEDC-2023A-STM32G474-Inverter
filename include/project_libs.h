@@ -7,6 +7,7 @@
 #include "oledll.h"
 #include "PWM.h"
 #include "sample.h"
+#include "inverter_control.h"
 #include "voloop.h"
 #include "voloop_stm32.h"
 

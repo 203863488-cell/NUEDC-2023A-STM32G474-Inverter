@@ -53,6 +53,7 @@ extern "C" {
 void Error_Handler(void);
 
 /* USER CODE BEGIN EFP */
+void App_HRTIMControlIRQ(void);
 
 /* USER CODE END EFP */
 
